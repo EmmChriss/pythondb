@@ -35,16 +35,35 @@ def main():
                 txtfld = Entry(window3, text="Irja be az oszlop nevet", bd=5, textvariable=collumn_name)
                 txtfld.place(x=150,y=200)
 
+                def convert_to_json():
+                    file=open(json_file.get())
+                    items=[]
+                    for line in file:
+                        if not line.strip():
+                            continue
+                        d={}
+                        data=line.split('|')
+                        for val in data:
+                            key,sep,value=val.partition(':')
+                            d[key.strip()]=value.strip()
+                        items.append(d)
+                    with open(json_file.get(),'w') as json_f:
+                        json.dump(items,json_f)
+
                 def write_to_json():
                     f=open(json_file.get(), "a")
-                    f.write(collumn_name.get())
+                    f.write(collumn_name.get()+"\n")
                     f.close()
-
+                    convert_to_json()
+                
                 btn_add = Button(window3, text="Add", fg='red', font=("Times New Roman", 12), command = write_to_json)
                 btn_add.place(x=150,y=250)
 
             btn = Button(window3, text="Add collumn", fg='red', font=("Times New Roman", 12), command = add_collumn)
             btn.place(x=150,y=150)
+
+            #btn_back=Button(window3, text="Add collumn", fg='red', font=("Times New Roman", 12), command = create_table_window(path))
+            #btn_back.place(x=1)
 
             window3.title('Projekt')
             window3.geometry("400x500+10+20")
