@@ -21,19 +21,40 @@ def main():
     def create_table():
         source_path = filedialog.askdirectory(title='Select Title')
         tabla_nev.set(source_path+"\\"+tabla_nev.get()+".json")
-        open(tabla_nev.get(),'w+').close()
+        f=open(tabla_nev.get(),'a')
+        f.write("[\n]")
+        f.close()
         txtfld_tabla.delete(0,'end')
 
     def create_column():
         source_path = filedialog.askopenfilename(title='Select Title')
+        f=open(source_path,'a+')
+        size=f.tell()
+        f.truncate(size-1)
+        f.seek(0, 2)
+        f.seek(f.tell() - 3, 0)
+        karakter = f.read()
         
-        f=open(source_path, "w")
+        if karakter[0] != '[':
+            f.write(",")
+            f.write("\n")
+        index=StringVar()
+        if(oszlop_index==1):
+            index.set("true")
+        else:
+            index.set("false")
+        data={"column name":oszlop_nev.get(),"column type":oszlop_tipus.get(),"column index":index.get()}
+        json.dump(data,f,indent=4)
+        f.write("\n]")
+        f.close()
+
         txtfld_oszlop.delete(0,'end')
+        txtfld_oszlopindex.delete(0,'end')
+        txtfld_oszloptipus.delete(0,'end')
 
     def drop_table():
-        source_path = filedialog.askdirectory(title='Select Title')
+        source_path = filedialog.askopenfilename(title='Select Title')
         os.remove(source_path)
-        txtfld_dropt.delete(0,'end')
 
 
     window = Tk()
@@ -95,16 +116,13 @@ def main():
     lbl_dropt = Label(window,text="Melyik tablat toroljuk?", fg='red', font=('Times New Roman', 16))
     lbl_dropt.place(x=400,y=160)
 
-    droptabla_nev=StringVar()
-    txtfld_dropt = Entry(window, text="Melyik tablat toroljuk?", bd=5, textvariable=droptabla_nev)
-    txtfld_dropt.place(x=430,y=200)
-
     btn_dropt = Button(window, text="Drop table", fg='green', font=("Times New Roman", 12), command=drop_table)
-    btn_dropt.place(x=455,y=240)
+    btn_dropt.place(x=455,y=210)
 
     window.title('Projekt')
     window.geometry("800x600+10+20")
     window.mainloop()
+
     
 if __name__ == "__main__":
     main()
