@@ -4,53 +4,52 @@ import json
 import os
 import shutil
 from PIL import ImageTk, Image
+import socket
+import sys
 
-
-# kliens szerver, foreign key!!!!!!!!!!!!!!!!!!!
 def main():
+
     def create_folder():
-        source_path = filedialog.askdirectory(title='Select Title')
-        path = os.path.join(source_path,input_variable.get())
-        os.makedirs(path)
+        sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address=('localhost', 1000)
+        sock.connect(server_address)
+        input_variable.set('create_folder ' + input_variable.get())
+        sock.sendall(input_variable.get().encode('utf-8'))
         txtfld.delete(0,'end')
-        ab_neve.set(input_variable.get()+" ")
+        sock.close()
 
     def drop_folder():
-        source_path = filedialog.askdirectory(title='Select Title')
-        shutil.rmtree(source_path)
+        sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address=('localhost', 1000)
+        sock.connect(server_address)
+        sock.sendall('drop_folder'.encode('utf-8'))
+        sock.close()
 
     def create_table():
-        source_path = filedialog.askdirectory(title='Select Title')
-        tabla_nev.set(source_path+"\\"+tabla_nev.get()+".json")
-        f=open(tabla_nev.get(),'a')
-        f.write("[\n]")
-        f.close()
+        sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address=('localhost', 1000)
+        sock.connect(server_address)
+        tabla_nev.set('create_table ' + tabla_nev.get())
+        sock.sendall(tabla_nev.get().encode('utf-8'))
         txtfld_tabla.delete(0,'end')
+        sock.close()
 
     def create_column():
-        source_path = filedialog.askopenfilename(title='Select Title')
-        f=open(source_path,'a+')
-        size=f.tell()
-        f.truncate(size-1)
-        f.seek(0, 2)
-        f.seek(f.tell() - 3, 0)
-        karakter = f.read()
-        
-        if karakter[0] != '[':
-            f.write(",")
-            f.write("\n")
-        
-        data={"column name":oszlop_nev.get(),"column type":oszlop_tipus.get(),"column role":oszlop_index.get()}
-        json.dump(data,f,indent=4)
-        f.write("\n]")
-        f.close()
-
+        sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address=('localhost', 1000)
+        sock.connect(server_address)
+        oszlop=StringVar()
+        oszlop.set('create_column ' + oszlop_nev.get() + ' ' + oszlop_tipus.get() + ' ' + oszlop_index.get())
+        sock.sendall(oszlop.get().encode('utf-8'))
         txtfld_oszlop.delete(0,'end')
+        sock.close()
 
     def drop_table():
-        source_path = filedialog.askopenfilename(title='Select Title')
-        os.remove(source_path)
-
+        sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address=('localhost', 1000)
+        sock.connect(server_address)
+        sock.sendall('drop_table'.encode('utf-8'))
+        sock.close()
 
     window = Tk()
 
@@ -107,7 +106,7 @@ def main():
     lbl_oszlopindex.place(x=450,y=340)
 
     oszlop_index=StringVar()
-    indexek=['primary key', 'foreign key', 'unique', 'index', 'none']
+    indexek=['primary-key', 'foreign-key', 'unique', 'index', 'none']
     option_menu_index=OptionMenu(window, oszlop_index, *indexek)
     option_menu_index.place(x=450,y=380)
 
