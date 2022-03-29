@@ -98,6 +98,17 @@ def main():
         source_path = filedialog.askopenfilename(title='Select Title')
         os.remove(source_path)
 
+    def insert():
+        source_path = filedialog.askopenfilename(title='Select Title')
+        client.send(source_path.encode('utf-8'))
+    
+    def delete():
+        source_path=filedialog.askopenfilename(title='Select Title')
+        client.send(source_path.encode('utf-8'))
+
+    def check():
+        pass
+
     sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_address=('localhost', 1000)
     sock.bind(server_address)
@@ -122,6 +133,12 @@ def main():
             create_column()
         elif(valtozok[0]=='drop_table'):
             drop_table()
+        elif(valtozok[0]=='insert'):
+            insert()
+        elif(valtozok[0]=='delete'):
+            delete()
+        elif(valtozok[0]=='check'):
+            check()
 
 
 if __name__ == "__main__":
