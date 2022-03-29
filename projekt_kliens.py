@@ -51,6 +51,42 @@ def main():
         sock.sendall('drop_table'.encode('utf-8'))
         sock.close()
 
+    def insert():
+
+        def check():
+            sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_address=('localhost', 1000)
+            sock.connect(server_address)
+            sock.sendall('check'.encode('utf-8'))
+            sock.close()
+
+        sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address=('localhost', 1000)
+        sock.connect(server_address)
+        sock.sendall('insert'.encode('utf-8'))
+        data=sock.recv(2034)
+        sock.close()
+        data=data.decode()
+        source_path.set(data)
+        f=open(source_path.get(), 'r')
+        sorok_szama.set(len(json.load(f)))
+        txtfld_values = Entry(window, text="Faszom", bd=5, textvariable=tabla_nev)
+        txtfld_values.place(x=420,y=480)
+        btn = Button(window, text="Add value:", fg='green', font=("Times New Roman", 12), command=check, bg="lightblue")
+        btn.place(x=480,y=480)
+
+        
+    def delete():
+        sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address=('localhost', 1000)
+        sock.connect(server_address)
+        sock.sendall('delete'.encode('utf-8'))
+        data=sock.recv(2034)
+        sock.close()
+        data=data.decode()
+        delete_source.set(data)
+        print(delete_source.get())
+
     window = Tk()
 
     img = ImageTk.PhotoImage(Image.open("kep1.png"))
@@ -118,6 +154,24 @@ def main():
 
     btn_dropt = Button(window, text="Drop table", fg='green', font=("Times New Roman", 12), command=drop_table, bg="lightblue")
     btn_dropt.place(x=455,y=210)
+
+    source_path=StringVar()
+    sorok_szama=StringVar()
+    lbl_insert=Label(window,text="Insert into ", fg='red', font=('Times New Roman', 16), bg="lightblue")
+    lbl_insert.place(x=150, y=480)
+
+    btn_insert=Button(window, text="Choose table", fg='green', font=("Times New Roman", 12), command=insert, bg="lightblue")
+    btn_insert.place(x=260, y=480)
+
+    lbl_values=Label(window,text="values", fg='red', font=('Times New Roman', 16), bg="lightblue")
+    lbl_values.place(x=360, y=480)
+
+    delete_source=StringVar()
+    lbl_delete=Label(window,text="Delete from", fg='red', font=('Times New Roman', 16), bg="lightblue")
+    lbl_delete.place(x=150, y=520)
+
+    btn_delete=Button(window, text="Choose table", fg='green', font=("Times New Roman", 12), command=delete, bg="lightblue")
+    btn_delete.place(x=260, y=520)
 
     window.title('Projekt')
     window.geometry("800x600+10+20")
