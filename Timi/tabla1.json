@@ -10,4 +10,11 @@
     "column type": "string",
     "column role": "unique"
 }
+,
+{
+    "column name": "negy",
+    "column type": "float",
+    "column role": "foreign-key",
+    "references": "D:/egyetem/2_ev/2_felev/adat/projekt/abkr/Timi2/tabla2.json"
+}
 ]

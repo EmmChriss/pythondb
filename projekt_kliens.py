@@ -70,10 +70,13 @@ def main():
         source_path.set(data)
         f=open(source_path.get(), 'r')
         sorok_szama.set(len(json.load(f)))
-        txtfld_values = Entry(window, text="Faszom", bd=5, textvariable=tabla_nev)
+        txtfld_values = Entry(window, text="Ojaj", bd=5, textvariable=tabla_nev)
         txtfld_values.place(x=420,y=480)
         btn = Button(window, text="Add value:", fg='green', font=("Times New Roman", 12), command=check, bg="lightblue")
         btn.place(x=480,y=480)
+        for i in range(sorok_szama):
+           txtfld_values.delete(0,'end')
+        
 
         
     def delete():
