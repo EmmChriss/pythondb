@@ -52,32 +52,29 @@ def main():
         sock.close()
 
     def insert():
-
-        def check():
+        def check_insert():
             sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_address=('localhost', 1000)
             sock.connect(server_address)
-            sock.sendall('check'.encode('utf-8'))
+            insert_values.set('check_insert'+' '+insert_table+' '+insert_values.get())
+            sock.sendall(insert_values.get().encode('utf-8'))
+            txtfld_insert.delete(0, 'end')
             sock.close()
 
         sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_address=('localhost', 1000)
         sock.connect(server_address)
         sock.sendall('insert'.encode('utf-8'))
-        data=sock.recv(2034)
+        insert_table=sock.recv(2034)
         sock.close()
-        data=data.decode()
-        source_path.set(data)
-        f=open(source_path.get(), 'r')
-        sorok_szama.set(len(json.load(f)))
-        txtfld_values = Entry(window, text="Ojaj", bd=5, textvariable=tabla_nev)
-        txtfld_values.place(x=420,y=480)
-        btn = Button(window, text="Add value:", fg='green', font=("Times New Roman", 12), command=check, bg="lightblue")
-        btn.place(x=480,y=480)
-        for i in range(sorok_szama):
-           txtfld_values.delete(0,'end')
-        
+        insert_table=insert_table.decode()
 
+        insert_values=StringVar()
+        txtfld_insert = Entry(window, text="values", bd=5, textvariable=insert_values)
+        txtfld_insert.place(x=400,y=480)
+
+        btn_checkInstert=Button(window, text="Insert values", fg='green', font=("Times New Roman", 12), command=check_insert, bg="lightblue")
+        btn_checkInstert.place(x=600, y=480)
         
     def delete():
         sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -103,7 +100,6 @@ def main():
     txtfld = Entry(window, text="Irja be az adatbazis nevet", bd=5, textvariable=input_variable)
     txtfld.place(x=140,y=60)
 
-    ab_neve=StringVar()
     btn = Button(window, text="Create database", fg='green', font=("Times New Roman", 12), command=create_folder, bg="lightblue")
     btn.place(x=150,y=100)
 
@@ -158,8 +154,6 @@ def main():
     btn_dropt = Button(window, text="Drop table", fg='green', font=("Times New Roman", 12), command=drop_table, bg="lightblue")
     btn_dropt.place(x=455,y=210)
 
-    source_path=StringVar()
-    sorok_szama=StringVar()
     lbl_insert=Label(window,text="Insert into ", fg='red', font=('Times New Roman', 16), bg="lightblue")
     lbl_insert.place(x=150, y=480)
 

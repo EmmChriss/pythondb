@@ -6,6 +6,7 @@ import shutil
 from PIL import ImageTk, Image
 import socket
 import sys
+import parser
 
 def main():
     def create_folder():
@@ -106,8 +107,35 @@ def main():
         source_path=filedialog.askopenfilename(title='Select Title')
         client.send(source_path.encode('utf-8'))
 
-    def check():
-        pass
+    def check_insert():
+        f=open(valtozok[1], 'r')
+        data=json.load(f)
+        seged=valtozok[2].split("#")
+        if(len(data)!=len(seged)):
+            print('error')
+            error_window=Tk()
+            lbl_error = Label(error_window,text="Less or more arguments are needed", fg='red', font=('Times New Roman', 16), bg="lightblue")
+            lbl_error.place(x=10,y=50)
+            error_window.title('Less or more arguments are needed')
+            error_window.geometry("400x100+10+20")
+            error_window.lift()
+            error_window.mainloop()
+            return
+        j=0
+        for i in data:
+            if(parser.parser_input(seged[j], i['column type'])==False):
+                print('error')
+                error_window=Tk()
+                error_message=StringVar()
+                error_message.set("Input does not match! You need to put in the "+str(j+1)+" . place a variable type "+str(i['column type']))
+                lbl_error = Label(error_window,text=error_message.get(), fg='red', font=('Times New Roman', 16), bg="lightblue")
+                lbl_error.place(x=10,y=50)
+                error_window.title('Less or more arguments are needed')
+                error_window.geometry("400x100+10+20")
+                error_window.lift()
+                error_window.mainloop()
+                return
+            j=j+1
 
     sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_address=('localhost', 1000)
@@ -137,8 +165,8 @@ def main():
             insert()
         elif(valtozok[0]=='delete'):
             delete()
-        elif(valtozok[0]=='check'):
-            check()
+        elif(valtozok[0]=='check_insert'):
+            check_insert()
 
 
 if __name__ == "__main__":
