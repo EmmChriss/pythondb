@@ -26,9 +26,11 @@ def main():
         sock.close()
 
     def create_table():
+        print("ok")
         sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_address=('localhost', 1000)
         sock.connect(server_address)
+        print("ok")
         tabla_nev.set('create_table ' + tabla_nev.get())
         sock.sendall(tabla_nev.get().encode('utf-8'))
         txtfld_tabla.delete(0,'end')
@@ -71,12 +73,21 @@ def main():
 
         insert_values=StringVar()
         txtfld_insert = Entry(window, text="values", bd=5, textvariable=insert_values)
-        txtfld_insert.place(x=400,y=480)
+        txtfld_insert.place(x=430,y=480)
 
         btn_checkInstert=Button(window, text="Insert values", fg='green', font=("Times New Roman", 12), command=check_insert, bg="lightblue")
         btn_checkInstert.place(x=600, y=480)
         
     def delete():
+        def check_delete():
+            sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_address=('localhost', 1000)
+            sock.connect(server_address)
+            delete_value.set('check_delete'+' '+delete_source.get()+' '+delete_value.get())
+            sock.sendall(delete_value.get().encode('utf-8'))
+            txtfld_delete.delete(0, 'end')
+            sock.close()
+
         sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_address=('localhost', 1000)
         sock.connect(server_address)
@@ -85,7 +96,13 @@ def main():
         sock.close()
         data=data.decode()
         delete_source.set(data)
-        print(delete_source.get())
+        
+        delete_value=StringVar()
+        txtfld_delete=Entry(window, text="values", bd=5, textvariable=delete_value)
+        txtfld_delete.place(x=430,y=520)
+
+        btn_checkDelete=Button(window, text="Delete value", fg='green', font=("Times New Roman", 12), command=check_delete, bg="lightblue")
+        btn_checkDelete.place(x=600, y=520)
 
     window = Tk()
 
@@ -169,6 +186,9 @@ def main():
 
     btn_delete=Button(window, text="Choose table", fg='green', font=("Times New Roman", 12), command=delete, bg="lightblue")
     btn_delete.place(x=260, y=520)
+
+    lbl_deleteWhere=Label(window,text="where", fg='red', font=('Times New Roman', 16), bg="lightblue")
+    lbl_deleteWhere.place(x=360, y=520)
 
     window.title('Projekt')
     window.geometry("800x600+10+20")

@@ -1,0 +1,13 @@
+[
+{
+    "column name": "egy",
+    "column type": "int",
+    "column role": "primary-key"
+}
+,
+{
+    "column name": "ketto",
+    "column type": "string",
+    "column role": "none"
+}
+]

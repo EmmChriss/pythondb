@@ -6,12 +6,12 @@ collection = db.vadallatok
   
 emp_rec1 = {
         "name":"Mr.Geek",
-        "eid":24,
+        "eid":25,
         "location":"delhi"
         }
 emp_rec2 = {
         "name":"Mr.Shaurya",
-        "eid":14,
+        "eid":1,
         "location":"delhi"
         }
   
