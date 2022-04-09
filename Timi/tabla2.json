@@ -1,0 +1,51 @@
+[
+{
+    "column name": "id",
+    "column type": "int",
+    "column role": "primary-key-unique"
+}
+,
+{
+    "column name": "egy",
+    "column type": "float",
+    "column role": "primary-key-unique"
+}
+,
+{
+    "column name": "ketto",
+    "column type": "bit",
+    "column role": "primary-key-not-unique"
+}
+,
+{
+    "column name": "harom",
+    "column type": "int",
+    "column role": "primary-key-unique"
+}
+,
+{
+    "column name": "negy",
+    "column type": "int",
+    "column role": "primary-key-unique"
+}
+,
+{
+    "column name": "ot",
+    "column type": "float",
+    "column role": "primary-key-not-unique"
+}
+,
+{
+    "column name": "hat",
+    "column type": "float",
+    "column role": "foreign-key",
+    "references": "D:/egyetem/2_ev/2_felev/adat/projekt/abkr/Timi/tabla1.json"
+}
+,
+{
+    "column name": "het",
+    "column type": "int",
+    "column role": "foreign-key",
+    "references": "D:/egyetem/2_ev/2_felev/adat/projekt/abkr/Timi/tabla1.json"
+}
+]

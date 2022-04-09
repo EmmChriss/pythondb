@@ -26,11 +26,9 @@ def main():
         sock.close()
 
     def create_table():
-        print("ok")
         sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_address=('localhost', 1000)
         sock.connect(server_address)
-        print("ok")
         tabla_nev.set('create_table ' + tabla_nev.get())
         sock.sendall(tabla_nev.get().encode('utf-8'))
         txtfld_tabla.delete(0,'end')
@@ -41,7 +39,10 @@ def main():
         server_address=('localhost', 1000)
         sock.connect(server_address)
         oszlop=StringVar()
-        oszlop.set('create_column ' + oszlop_nev.get() + ' ' + oszlop_tipus.get() + ' ' + oszlop_index.get())
+        if(oszlop_index.get()=='primary-key'):
+            oszlop.set('create_column ' + oszlop_nev.get() + ' ' + oszlop_tipus.get() + ' ' + oszlop_index.get() + '-' + unique_tipus.get())
+        else:
+            oszlop.set('create_column ' + oszlop_nev.get() + ' ' + oszlop_tipus.get() + ' ' + oszlop_index.get())
         sock.sendall(oszlop.get().encode('utf-8'))
         txtfld_oszlop.delete(0,'end')
         sock.close()
@@ -104,6 +105,13 @@ def main():
         btn_checkDelete=Button(window, text="Delete value", fg='green', font=("Times New Roman", 12), command=check_delete, bg="lightblue")
         btn_checkDelete.place(x=600, y=520)
 
+    def selected_item(choice):
+        choice=oszlop_index.get()
+        if(choice=='primary-key'):
+            uniquek=['unique', 'not-unique']
+            option_menu_index=OptionMenu(window, unique_tipus, *uniquek)
+            option_menu_index.place(x=600,y=380)
+
     window = Tk()
 
     img = ImageTk.PhotoImage(Image.open("kep1.png"))
@@ -151,6 +159,7 @@ def main():
 
     tipusok=['int','string','date','datetime','float','bit']
     oszlop_tipus=StringVar()
+    unique_tipus=StringVar()
     option_menu=OptionMenu(window,oszlop_tipus,*tipusok)
     option_menu.place(x=298,y=380)
 
@@ -158,8 +167,9 @@ def main():
     lbl_oszlopindex.place(x=450,y=340)
 
     oszlop_index=StringVar()
+    unique_tipus=StringVar()
     indexek=['primary-key', 'foreign-key', 'unique', 'index', 'none']
-    option_menu_index=OptionMenu(window, oszlop_index, *indexek)
+    option_menu_index=OptionMenu(window, oszlop_index, *indexek, command=selected_item)
     option_menu_index.place(x=450,y=380)
 
     btn_oszlop = Button(window, text="Create content", fg='green', font=("Times New Roman", 12), command=create_column, bg="lightblue")

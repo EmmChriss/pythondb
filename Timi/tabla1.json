@@ -1,20 +1,26 @@
 [
 {
+    "column name": "id",
+    "column type": "int",
+    "column role": "primary-key-unique"
+}
+,
+{
     "column name": "egy",
     "column type": "int",
-    "column role": "primary-key"
+    "column role": "primary-key-not-unique"
 }
 ,
 {
     "column name": "ketto",
-    "column type": "string",
-    "column role": "unique"
+    "column type": "float",
+    "column role": "foreign-key",
+    "references": "D:/egyetem/2_ev/2_felev/adat/projekt/abkr/Timi/tabla2.json"
 }
 ,
 {
-    "column name": "negy",
-    "column type": "float",
-    "column role": "foreign-key",
-    "references": "D:/egyetem/2_ev/2_felev/adat/projekt/abkr/Timi2/tabla2.json"
+    "column name": "harom",
+    "column type": "bit",
+    "column role": "primary-key-not-unique"
 }
 ]
