@@ -23,7 +23,3 @@ pip install -r requirements.txt
 The server can be started by running `python server.py`
 
 Once that's running, a client can connect to the server using `python client.py`
-
-## License
-
-[MIT](LICENSE)
