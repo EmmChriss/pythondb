@@ -1,3 +1,4 @@
+drop_database asd
 create_database asd
 use_database asd
 
@@ -60,10 +61,10 @@ SELECT: join with where
 select * from a,b a1>&b1
 
 SELECT: join with aliases
-select c.a1,d.b1 from a:c,b:d
+select c.a1,d.b1 from a=c,b=d
 
 SELECT: self-join
-select * from b:c,b:d where c.b1=&d.b1
+select * from b=c,b=d where c.b1=&d.b1
 
 SELECT: reference
 select b.b1,a.a1 from a,b where a.a1=1
@@ -83,4 +84,3 @@ drop_table a
 
 drop_table b
 drop_table a
-drop_database asd

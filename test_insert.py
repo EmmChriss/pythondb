@@ -11,6 +11,11 @@ server.create_table('hazi')
 server.create_column('hazi', 'id', 'int', 'primary-key')
 server.create_column('hazi', 'faj', 'string', 'none')
 server.create_column('hazi', 'age', 'int', 'index')
+server.create_table('vad')
+server.create_column('vad', 'id', 'int', 'primary-key')
+server.create_column('vad', 'mutat', 'int', 'foreign-key=hazi.id')
+
+# benchmark inserting rows
 
 # last_time = time.time_ns()
 # insert_count = 0
@@ -34,10 +39,16 @@ server.create_column('hazi', 'age', 'int', 'index')
 #             last_time = new_time
 
 
-for i in range(20000):
-    faj = 'a'
+for i in range(80000):
+    faj = random.choice(['kuty', 'macs', 'fecs', 'kecs', 'szöcs', 'orángután'])
     age = random.randrange(50)
     server.insert('hazi', [str(i), faj, str(age)])
+    if i % 1000 == 0:
+        print(i)
+
+for i in range(20000):
+    mutat = random.randrange(20000)
+    server.insert('vad', [str(i), str(mutat)])
     if i % 1000 == 0:
         print(i)
 

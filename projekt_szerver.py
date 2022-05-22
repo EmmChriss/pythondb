@@ -3,6 +3,7 @@ import os
 import sys
 import shutil
 import socket
+import time
 from datetime import datetime
 from sys import stdin, stdout, stderr
 from error import Error, ServerError
@@ -124,7 +125,7 @@ class Server:
                     return datetime.strptime(input, '%Y-%m-%d-%H:%M:%S')
         except:
             pass
-        raise ServerError(Error.INVALID_TYPE, 'value: {input}: not of type: {type}')
+        raise ServerError(Error.INVALID_TYPE, f'value: {input}: not of type: {type}')
 
     #
     # INNER DATABASE METHODS
@@ -209,8 +210,8 @@ class Server:
 
         os.remove(self.tab_path(table))
         self.db[table].drop()
-        self.idb[f'{table}_fk'].drop()
         self.idb[f'{table}_uq'].drop()
+        self.idb[f'{table}_nq'].drop()
 
     def insert(self, table, values):
         tab_def = self.read_table(table)
@@ -221,7 +222,7 @@ class Server:
 
         # check type of values
         for col, val in zip(tab_def, values):
-            if not parser.parser_input(val, col['type']):
+            if not self.check_type(val, col['type']):
                 raise ServerError(Error.INVALID_TYPE, f"col: {col['name']}: {val} is not {col['type']}")
 
         # encode values in {_id, values} format
@@ -249,13 +250,12 @@ class Server:
                 case 'foreign-key':
                     # check that referenced key exists
                     rtab, rcol = col['reference'].split('.')
-                    ref_rows = self.__query(rtab, ['*'], [{'lhs': rcol, 'rhs': val, 'op': '=', 'inner': False}])
-                    if len(ref_rows) == 0:
+                    row = self.idb[f'{rtab}_uq'].find_one({'_id': {rcol: val}})
+                    if row is None:
                         raise ServerError(Error.INVALID_REFERENCE, f"ref: {col['reference']}={val}: no such row")
                 case 'unique' | 'primary-key':
                     # unique index
-                    row = self.idb[f'{table}_uq']\
-                        .find_one({'_id': {col['name']: val}})
+                    row = self.idb[f'{table}_uq'].find_one({'_id': {col['name']: val}})
                     if row is not None:
                         raise ServerError(Error.DUPLICATE_UNIQUE, f"col: {col['name']}={val} already exists")
 
@@ -265,19 +265,11 @@ class Server:
                 case 'foreign-key':
                     # fk index
                     rtab, rcol = col['reference'].split('.')
-                    row = self.idb[f'{rtab}_fk'].find_one_and_update(
-                        {'_id': {rcol: val}}, {"$push": {"refs": {'table': table, 'key': key}}})
-                    if row is None:
-                        self.idb[f'{rtab}_fk'].insert_one(
-                            {'_id': {rcol: val}, "refs": [{'table': table, 'key': key}]})
+                    self.idb[f'{rtab}_uq'].update_one({'_id': {rcol: val}},
+                        {"$push": {"refs": {'table': table, 'key': key}}})
                 case 'unique' | 'primary-key':
                     # unique index
-                    row = self.idb[f'{table}_uq']\
-                        .find_one({'_id': {col['name']: val}})
-                    if row is not None:
-                        raise ServerError(Error.DUPLICATE_UNIQUE, f"col: {col['name']}={val} already exists")
-                    self.idb[f'{table}_uq'].insert_one(
-                        {'_id': {col['name']: val}, "key": key})
+                    self.idb[f'{table}_uq'].insert_one({'_id': {col['name']: val}, "key": key, "refs": []})
                 case 'index':
                     # not unique index
                     row = self.idb[f'{table}_nq'].find_one_and_update(
@@ -303,8 +295,10 @@ class Server:
         # dont delete anything until then
         for row in rows:
             for col in row:
-                res = self.idb[f'{table}_fk']\
-                    .find_one({'_id': {col: row[col]}})
+                if col == '_id' or tab_dict[col]['role'] not in ['unique', 'primary-key']:
+                    continue
+
+                res = self.idb[f'{table}_uq'].find_one({'_id': {col: row[col]}})
                 if res is not None and len(res['refs']) != 0:
                     refs = ', '.join(map(lambda ref: f'{ref["table"]}:{ref["key"]}', res['refs']))
                     raise ServerError(Error.FOREIGN_KEY_CONSTRAINT, f"{table}.{col}:{row['_id']} referenced by {refs}")
@@ -323,42 +317,47 @@ class Server:
                 match col['role']:
                     case 'foreign-key':
                         ref_tab, ref_col = col['reference'].split('.')
-                        self.idb[f'{ref_tab}_fk'].find_one_and_update(
-                            {'_id': {ref_col: val}}, {"$pull": {"refs": {"table": table, "key": key}}})
+                        self.idb[f'{ref_tab}_uq'].update_one({'_id': {ref_col: val}},
+                            {"$pull": {"refs": {"table": table, "key": key}}})
                     # delete uq index
                     case 'unique' | 'primary-key':
                         self.idb[f'{table}_uq'].delete_one(
                             {'_id': {col['name']: val}})
                     # delete nq index
                     case 'index':
-                        self.idb[f'{table}_nq'].find_one_and_update(
-                            {'_id': {col['name']: val}}, {"$pull": {"keys": key}})
+                        self.idb[f'{table}_nq'].update_one({'_id': {col['name']: val}},
+                            {"$pull": {"keys": key}})
             # delete row
             self.db[table].delete_one({'_id': key})
 
     # generator function that joins two sets of rows
-    def __join_tables(self, name1, name2, rows1, rows2):
+    def __join_tables(self, name1, name2, rows1, rows2, wh_eq, hash_join):
         # for all pairs of rows
         for r1 in rows1:
-            for r2 in rows2:
+            if hash_join is None:
+                idxs = range(len(rows2))
+            else:
+                vals = tuple(map(lambda w: r1[w], wh_eq.values()))
+                idxs = hash_join.get(vals)
+                if idxs is None:
+                    continue
+            for r2 in idxs:
+                r2 = rows2[r2]
                 # execute join
-                joined = {}
-                exclude = []
-                for k1 in r1:
-                    if r2.get(k1) is not None:
-                        joined[f'{name1}.{k1}'] = r1[k1]
-                        joined[f'{name2}.{k1}'] = r2[k1]
-                        exclude.append(k1)
-                    else:
-                        joined[k1] = r1[k1]
-                for k2 in r2:
-                    if k2 not in exclude:
-                        joined[k2] = r2[k2]
+                joined = r1.copy()
+                if '_id' in joined:
+                    joined[f'{name1}._id'] = joined['_id']
+                    del joined['_id']
+                joined.update(r2)
+                if '_id' in joined:
+                    joined[f'{name2}._id'] = joined['_id']
+                    del joined['_id']
 
                 yield joined
 
     def __reconstruct_row(self, tab_dict, cols, row):
         any_select = '*' in cols
+        aliased = type(cols) == dict and not any_select
 
         keys = row['_id'].split('#')
         vals = row['values'].split('#')
@@ -370,44 +369,36 @@ class Server:
             else:
                 val = vals.pop(0)
 
-            if not any_select and col not in cols:
+            if not (any_select or col in cols):
                 continue
 
-            match tab_dict[col]['type']:
-                case 'int': val = int(val)
-                case 'float': val = float(val)
-                case 'string': pass
-                case 'bit': val = int(val)
-                case 'date': val = datetime.strptime(val, '%Y-%m-%d')
-                case 'datetime': val = datetime.strptime(val, '%Y-%m-%d-%H:%M:%S')
+            val = self.cast_to(val, tab_dict[col]['type'])
 
-            doc[col] = val
+            if aliased:
+                doc[cols[col]] = val
+            else:
+                doc[col] = val
 
         return doc
 
-    def __where_check(self, row, where):
-        a = {
-            "=": lambda a, b: a == b,
-            "!=": lambda a, b: a != b,
-            ">": lambda a, b: a > b,
-            "<": lambda a, b: a < b,
-            ">=": lambda a, b: a >= b,
-            "<=": lambda a, b: a <= b
-        }
-        a["/="] = a["!="]
+    OP_LAMBDA = {
+        "=": lambda a, b: a == b,
+        "!=": lambda a, b: a != b,
+        "/=": lambda a, b: a != b,
+        ">": lambda a, b: a > b,
+        "<": lambda a, b: a < b,
+        ">=": lambda a, b: a >= b,
+        "<=": lambda a, b: a <= b
+    }
 
+    def __where_check(self, row, where):
         def wh_check(wh):
             lhs = row[wh['lhs']]
             if wh['inner']:
-                if (rhs := row.get(wh['rhs'])) is not None:
-                    pass
-                elif '.' in wh['rhs'] and (rhs := row.get(wh['rhs'].split('.')[1])) is not None:
-                    pass
-                else:
-                    raise ServerError(Error.INVALID_REFERENCE, 'row: {row}: does not contain column: {wh["rhs"]}')
+                rhs = row[wh['rhs']]
             else:
                 rhs = wh['rhs']
-            return a[wh['op']](lhs, rhs)
+            return Server.OP_LAMBDA[wh['op']](lhs, rhs)
 
         return all(map(lambda wh: wh_check(wh), where))
 
@@ -419,9 +410,10 @@ class Server:
             if tab_def_dict[col]['role'] == 'primary-key':
                 keyval = where_eq.get(col)
                 if keyval is not None:
-                    key.append(keyval)
+                    key.append(str(keyval))
                 else:
                     return None
+
         return "#".join(key)
 
     # construct query with indexes
@@ -435,20 +427,20 @@ class Server:
 
             # check if indexed
             match col['role']:
-                case 'unique':
-                    keys = self.idb[f'{table}_uq'].find_one({'_id': {col_name: val}})
-                    if keys is not None:
-                        keys = [keys["key"]]
+                case 'unique' | 'primary-key':
+                    index = self.idb[f'{table}_uq'].find_one({'_id': {col_name: str(val)}})
+                    if index is not None:
+                        keys = [index["key"]]
                 case 'index':
-                    keys = self.idb[f'{table}_nq'].find_one({'_id': {col_name: val}})
-                    if keys is not None:
-                        keys = keys['keys']
+                    index = self.idb[f'{table}_nq'].find_one({'_id': {col_name: str(val)}})
+                    if index is not None:
+                        keys = index['keys']
                 case 'foreign-key':
                     ref_tab, ref_col = col['reference'].split('.')
-                    keys = self.idb[f'{ref_tab}_fk'].find_one({'_id': {ref_col: val}})
-                    if keys is not None:
-                        keys = filter(lambda doc: doc['table'] == table, keys['refs'])
-                        keys = map(lambda doc: doc['key'], keys)
+                    index = self.idb[f'{ref_tab}_uq'].find_one({'_id': {ref_col: str(val)}})
+                    if index is not None:
+                        index = filter(lambda doc: doc['table'] == table, index['refs'])
+                        keys = map(lambda doc: doc['key'], index)
                 case _:
                     continue
 
@@ -458,35 +450,47 @@ class Server:
             # no keys to merge with previously found
             if keys is None:
                 ids = set()
-                continue
+                break
 
             # if first loop then create new set, else intersect with newly found keys
             if ids is None:
                 ids = set(keys)
             else:
-                ids.intersect_update(keys)
+                ids.intersection_update(keys)
 
         return (ids, to_delete)
 
     def __query(self, table, columns, where):
         tab_dict = self.read_table_dict(table)
 
+        # cast values in where to column types
+        for wh in where:
+            if wh['inner']:
+                continue
+            wh['rhs'] = self.cast_to(wh['rhs'], tab_dict[wh['lhs']]['type'])
+
         # construct where_eq for use in searching by index
         where_eq = {}
         for wh in where:
             # TODO: make this wh['inner'] compatible somehow
             # NOTE: aka, implement hash joins
-            # NOTE: not sure that's required, only an optimization
             if wh['op'] == '=' and not wh['inner']:
                 where_eq[wh['lhs']] = wh['rhs']
 
-        # query
+        # see if a complete _id can be reconstructed from where
         key = self.__pk_reconstruction(tab_dict, where_eq)
         if key is not None:
             query_doc = {'_id': key}
+
+        # normal index search
         keys, to_delete = self.__index_search(table, tab_dict, where_eq)
+
+        # remove where conditions that were indexed
+        where = filter(lambda wh: not (wh['op'] == '=' and not wh['inner'] and wh['lhs'] in to_delete), where)
+        where = list(where)
+
+        # query
         if keys is not None:
-            # TODO: delete 'to_delete' lhs-es from where
             query_doc = {'_id': {'$in': list(keys)}}
         else:
             query_doc = {}
@@ -499,15 +503,63 @@ class Server:
         return res
 
     # tables: dict[alias, table]
-    # columns: list[col]
+    # columns: dict[alias, col]
     # where: list[{lhs, rhs, op, inner}]
-    def select(self, tables, columns, where):
+    def select(self, tables, columns, where, having):
         tab_defs = {}
         tab_dicts = {}
         for alias in tables:
             tab = tables[alias]
             tab_defs[alias] = self.read_table(tab)
             tab_dicts[alias] = self.table_def_to_dict(tab_defs[alias])
+
+        # map all possible names to their reference
+        col_ref = {}
+        ambiguous_refs = []
+        for alias in tab_dicts:
+            tab_dict = tab_dicts[alias]
+            for col in tab_dict:
+                if col_ref.get(col) is not None:
+                    del col_ref[col]
+                    ambiguous_refs.append(col)
+                elif col not in ambiguous_refs:
+                    col_ref[col] = (alias, col)
+                col_ref[f'{alias}.{col}'] = (alias, col)
+
+        # take aliased columns into account
+        # TODO: rework this, it has bugs
+        aliased_refs = []
+        for alias in columns:
+            if alias == '*':
+                break
+
+            breakpoint()
+            col = columns[alias]
+            if (ref := col_ref.get(col)) is None:
+                if col in ambiguous_refs:
+                    raise ServerError(Error.AMBIGUOUS_REFERENCE, f'ref: {col}; try table.column format')
+                elif col in aliased_refs:
+                    raise ServerError(Error.INVALID_REFERENCE, f"ref: {col}: no such column: column was aliased")
+                else:
+                    raise ServerError(Error.INVALID_REFERENCE, f"ref: {col}: no such column")
+            rtab, rcol = ref
+
+            if col_ref.get(rcol) is not None:
+                del col_ref[rcol]
+                if rcol in aliased_refs:
+                    aliased_refs.remove(rcol)
+            if col_ref.get(f'{rtab}.{rcol}') is not None:
+                del col_ref[f'{rtab}.{rcol}']
+
+            if col_ref.get(alias) is not None:
+                del col_ref[alias]
+                ambiguous_refs.append(alias)
+            else:
+                aliased_refs.append(alias)
+                col_ref[alias] = ref
+
+            aliased_refs.append(f'{rtab}.{alias}')
+            col_ref[f'{rtab}.{alias}'] = ref
 
         # check that projection columns and columns used in filtering actually exist
         where_cols = chain(
@@ -520,71 +572,64 @@ class Server:
         else:
             to_check = chain(columns, where_cols)
 
-        # figure out which name refers to which column
-        col_ref = {}
         for col in to_check:
-            if col_ref.get(col) is not None:
-                continue
-
-            ref = None
-            if '.' in col:
-                rtab, rcol = col.split('.')
-                rtab_def = tab_dicts.get(rtab)
-                if rtab_def is None:
-                    raise ServerError(Error.INVALID_REFERENCE, f"ref: {col}: no such table")
-                rcol_def = rtab_def.get(rcol)
-                if rcol_def is None:
+            if (ref := col_ref.get(col)) is None:
+                if col in ambiguous_refs:
+                    raise ServerError(Error.AMBIGUOUS_REFERENCE, f'ref: {col}; try table.column format')
+                elif col in aliased_refs:
+                    raise ServerError(Error.INVALID_REFERENCE, f"ref: {col}: no such column: column was aliased")
+                else:
                     raise ServerError(Error.INVALID_REFERENCE, f"ref: {col}: no such column")
-                ref = (rtab, rcol)
-            else:
-                for tab in tab_defs:
-                    tab_dict = tab_dicts[tab]
-                    if tab_dict.get(col) is not None:
-                        if col_ref.get(col) is not None:
-                            raise ServerError(Error.AMBIGUOUS_REFERENCE, f'ref: {ref}')
-                        else:
-                            ref = (tab, col)
-            if ref is None:
-                raise ServerError(Error.INVALID_REFERENCE, f'ref: {col}')
-
-            # the reference for the column is stored
-            col_ref[col] = ref
 
         # figure out what applies to which subselect
         if '*' in columns:
-            col_by_table = None
+            col_by_table = {}
+            for alias in tab_dicts:
+                col_by_table[alias] = {}
+                tab_dict = tab_dicts[alias]
+                for col in tab_dict:
+                    rtab, rcol = col_ref['.'.join((alias, col))]
+                    if rcol in ambiguous_refs:
+                        col_by_table[alias][rcol] = f'{rtab}.{rcol}'
+                    else:
+                        col_by_table[alias][rcol] = rcol
         else:
             col_by_table = {}
             for col in columns:
                 rtab, rcol = col_ref[col]
                 if rtab not in col_by_table:
-                    col_by_table[rtab] = []
-                col_by_table[rtab].append(rcol)
+                    col_by_table[rtab] = {}
+                if rcol in ambiguous_refs:
+                    col_by_table[rtab][rcol] = f'{rtab}.{rcol}'
+                else:
+                    col_by_table[rtab][rcol] = rcol
 
         wh_by_table = {}
         wh_by_join = {}
         for wh in where:
-            lref = col_ref.get(wh['lhs'])
+            lref = col_ref[wh['lhs']]
+
+            val = wh.copy()
+            val['lhs'] = lref[1]
+
             if wh['inner']:
                 # if both lhs and rhs refer to columns
                 rref = col_ref.get(wh['rhs'])
+                val['rhs'] = rref[1]
+
                 if lref[0] == rref[0]:
                     # if they are on the same table
                     key = lref[0]
                     dict = wh_by_table
-                    val = wh.copy()
-                    val['lhs'] = val['lhs'].split('.')[-1]
-                    val['rhs'] = val['rhs'].split('.')[-1]
                 else:
                     # if they are on different tables
                     key = frozenset([lref[0], rref[0]])  # frozenset, ignorant of order
                     dict = wh_by_join
-                    val = wh
+                    val['lhs'] = col_by_table[lref[0]][lref[1]]
+                    val['rhs'] = col_by_table[rref[0]][rref[1]]
             else:
                 key = lref[0]
                 dict = wh_by_table
-                val = wh.copy()
-                val['lhs'] = val['lhs'].split('.')[-1]
 
             if key not in dict:
                 dict[key] = []
@@ -609,11 +654,37 @@ class Server:
                 alias0 = alias1
                 continue
 
-            rows0 = self.__join_tables(alias0, alias1, rows0, rows1)
-            if (whs := wh_by_join.get(frozenset([alias0, alias1]))) is not None:
-                rows0 = filter(lambda row: self.__where_check(row, whs), rows0)
-                # TODO: test removing this
-                rows0 = list(rows0)
+            whs = wh_by_join.get(frozenset([alias0, alias1]))
+            if whs is None:
+                whs = []
+
+            # construct hash-join table
+            whs_eq = {}
+            for w in whs:
+                if w['op'] == '=':
+                    if w['lhs'] in rows1[0]:
+                        whs_eq[w['lhs']] = w['rhs']
+                    else:
+                        whs_eq[w['rhs']] = w['lhs']
+
+            whs = filter(lambda w: w['op'] != '=', whs)
+            whs = list(whs)
+
+            if len(whs_eq) == 0:
+                hash_join = None
+            else:
+                hash_join = {}
+            for i, row in enumerate(rows1):
+                if hash_join is None:
+                    break
+
+                vals = tuple(map(lambda k: row[k], whs_eq.keys()))
+                if hash_join.get(vals) is None:
+                    hash_join[vals] = []
+                hash_join[vals].append(i)
+
+            rows0 = self.__join_tables(alias0, alias1, rows0, rows1, whs_eq, hash_join)
+            rows0 = filter(lambda row: self.__where_check(row, whs), rows0)
             alias0 = alias1
 
         return rows0
@@ -694,21 +765,66 @@ class Server:
                 case ["delete", table, *where_clause]:
                     where = parse_where_clause(where_clause)
                     self.delete(table, where)
-                case ["select", cols, "from", tables, *where_clause]:
+                case ["select", cols, "from", tables, *clauses]:
+                    
+                    # column aliasing
                     cols = cols.split(',')
                     if '*' in cols:
-                        cols = ['*']
+                        cols_ = {'*': '*'}
+                    else:
+                        cols_ = {}
+                        for col in cols:
+                            spl = col.split('=')
+                            if len(spl) == 2:
+                                col, alias = spl
+                                cols_[alias] = col
+                            else:
+                                cols_[col] = col
+
+                    # table aliasing
                     tables_ = {}
                     for tab in tables.split(','):
-                        spl = tab.split(':')
+                        spl = tab.split('=')
                         if len(spl) == 2:
                             table, alias = spl
                             tables_[alias] = table
                         else:
                             tables_[tab] = tab
 
-                    where = parse_where_clause(where_clause)
-                    rows = self.select(tables_, cols, where)
+                    if 'on' in clauses:
+                        on_idx = clauses.index('on')
+                    else:
+                        on_idx = None
+
+                    if 'where' in clauses:
+                        where_idx = clauses.index('where')
+                    else:
+                        where_idx = None
+
+                    if 'having' in clauses:
+                        having_idx = clauses.index('having')
+                    else:
+                        having_idx = None
+
+                    if on_idx:
+                        on_clause = clauses[:where_idx or having_idx]
+                    else:
+                        on_clause = []
+
+                    if where_idx:
+                        where_clause = clauses[where_idx+1:having_idx]
+                    else:
+                        where_clause = []
+
+                    if having_idx:
+                        having_clause = clauses[having_idx:]
+                    else:
+                        having_clause = []
+                    
+                    breakpoint()
+                    where = parse_where_clause(on_clause + where_clause)
+                    having = parse_where_clause(having_clause)
+                    rows = self.select(tables_, cols_, where, having)
 
                     return int(Error.ROWS), rows
                 case _:
@@ -736,6 +852,7 @@ class Server:
             if len(line) == 0:
                 continue
 
+            start = time.perf_counter()
             code, message = self.run_command(line)
             if code != Error.ROWS:
                 message = f'[{Error(code).name}] {message}\n'
@@ -744,10 +861,12 @@ class Server:
             else:
                 io_write.write(f'[{Error(code).name}]\n')
                 io_write.flush()
+                count = 0
                 for row in message:
                     io_write.write(f'{row}\n')
                     io_write.flush()
-                io_write.write('---\n')
+                    count += 1
+                io_write.write(f'--- {count} rows {time.perf_counter() - start} sec\n')
                 io_write.flush()
 
     def listen(self, address=('localhost', 25567)):
