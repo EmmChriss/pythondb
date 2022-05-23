@@ -411,24 +411,26 @@ class Server:
         }
     }
 
-    def __agggregate_rows(self, rows, aggregation, group_by):
-        ts = []
-        for i, a in enumerate(aggregation):
-            t = Server.AGGREGATE_LAMBDA[a['op']]['ctx']()
-            ts.append(t)
-
+    def __aggregate_rows(self, rows, aggregate, group_by):
+        hash_group = {}
         for row in rows:
-            for i, a in enumerate(aggregation):
-                ts[i] = Server.AGGREGATE_LAMBDA[a['op']]['each'](ts[i], row[a['row']])
+            tup = tuple(map(lambda k: row[k], group_by))
+            if (aggr_row := hash_group.get(tup)) is not None:
+                for a in aggregate:
+                    aggr_row[a['name']] = Server.AGGREGATE_LAMBDA[a['op']]['each'](aggr_row[a['name']], row[a['row']])
+            else:
+                initial_row = {c: row[c] for c in group_by}
+                for a in aggregate:
+                    initial_row[a['name']] = Server.AGGREGATE_LAMBDA[a['op']]['ctx']()
+                    initial_row[a['name']] = Server.AGGREGATE_LAMBDA[a['op']]['each'](initial_row[a['name']], row[a['row']])
+                hash_group[tup] = initial_row
 
-        for i, a in enumerate(aggregation):
-            ts[i] = Server.AGGREGATE_LAMBDA[a['op']]['post'](ts[i])
-
-        res = group_by.copy()
-        for t, a in zip(ts, aggregation):
-            res[a['name']] = t
-
-        return res
+        # finalize
+        for tup in hash_group:
+            row = hash_group[tup]
+            for a in aggregate:
+                row[a['name']] = Server.AGGREGATE_LAMBDA[a['op']]['post'](row[a['name']])
+            yield row
 
     def __project_rows(self, rows, projection):
         for row in rows:
@@ -529,7 +531,16 @@ class Server:
         for wh in where:
             if wh['inner']:
                 continue
-            wh['rhs'] = self.cast_to(wh['rhs'], tab_dict[wh['lhs']]['type'])
+
+            # NOTE: god-awful hack but does the job
+            # reverse lookup original column name from alias
+            orig_column = None
+            for col in columns:
+                if columns[col] == wh['lhs']:
+                    orig_column = col
+                    break
+
+            wh['rhs'] = self.cast_to(wh['rhs'], tab_dict[orig_column]['type'])
 
         # construct where_eq for use in searching by index
         where_eq = {}
@@ -602,7 +613,7 @@ class Server:
                 to_delete.append(alias)
                 to_append.append(inner_col)
             else:
-                group_by.append(col)
+                group_by.append(alias)
 
         for col in to_delete:
             del columns[col]
@@ -684,6 +695,8 @@ class Server:
         if any_select:
             for alias in tab_dicts:
                 tab_dict = tab_dicts[alias]
+                if alias not in col_by_table:
+                    col_by_table[alias] = {}
                 for col in tab_dict:
                     ref = col_ref[f'{alias}.{col}']
                     rtab, rcol = ref
@@ -695,12 +708,12 @@ class Server:
             lref = col_ref[wh['lhs']]
 
             val = wh.copy()
-            val['lhs'] = lref[1]
+            val['lhs'] = col_by_table[lref[0]][lref[1]]
 
             if wh['inner']:
                 # if both lhs and rhs refer to columns
                 rref = col_ref.get(wh['rhs'])
-                val['rhs'] = rref[1]
+                val['rhs'] = col_by_table[rref[0]][rref[1]]
 
                 if lref[0] == rref[0]:
                     # if they are on the same table
@@ -727,7 +740,6 @@ class Server:
         for alias1 in tables:
             cols = col_by_table.get(alias1) or ['*']
             wh = wh_by_table.get(alias1) or []
-
             rows1 = self.__query(tables[alias1], cols, wh)
             if rows0 is None:
                 rows0 = rows1
@@ -765,29 +777,20 @@ class Server:
             rows0 = filter(lambda row: self.__where_check(row, whs), rows0)
             alias0 = alias1
 
-        projection = {}
-        if with_id:
-            projection['_id'] = '_id'
+        if not any_select:
+            projection = {}
+            if with_id:
+                projection['_id'] = '_id'
 
-        for col in columns:
-            projection[col] = col
+            for col in columns:
+                projection[col] = col
 
-        rows0 = self.__project_rows(rows0, projection)
+            rows0 = self.__project_rows(rows0, projection)
 
         if len(aggregate) > 0:
-            rows = list(rows0)
+            rows0 = self.__aggregate_rows(rows0, aggregate, group_by)
 
-            # TODO: redesign this to work with iterator-chains
-            # 1. set instead of map
-            # 2. after each row, update row with relevant tuple hash
-            hash_group = {}
-            for i, row in enumerate(rows):
-                tup = tuple(map(lambda k: row[k], group_by))
-                if tup in hash_group:
-                    hash_group[tup].append(i)
-                else:
-                    hash_group[tup] = [i]
-
+            # cast having to row's type
             for hv, aggr in zip(having, aggregate):
                 if aggr['type'] is not None:
                     type = aggr['type']
@@ -798,11 +801,8 @@ class Server:
 
                 hv['rhs'] = self.cast_to(hv['rhs'], type)
 
-            groups = map(lambda k: (map(lambda i: rows[i], hash_group[k]), {l: rows[hash_group[k][0]][l] for l in group_by}), hash_group)
-            groups = map(lambda rs: self.__agggregate_rows(rs[0], aggregate, rs[1]), groups)
-            groups = filter(lambda row: self.__where_check(row, having), groups)
-            return groups
-
+            # filter by having
+            rows0 = filter(lambda row: self.__where_check(row, having), rows0)
         return rows0
 
     def run_command(self, command) -> (int, str):
@@ -981,8 +981,10 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         for path in sys.argv[1:]:
             if path == '-':
+                print('> executing from stdin')
                 server.run(stdin, stdout, stderr)
             else:
+                print(f'> executing {path}')
                 input = open(path, 'r')
                 server.run(input, stdout, stderr)
                 input.close()
