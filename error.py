@@ -4,6 +4,7 @@ from enum import IntEnum, auto
 class Error(IntEnum):
     SUCCESS = auto()
     ROWS = auto()
+    INVALID_AGGREGATION = auto()
     INVALID_COMMAND = auto()
     ALREADY_EXISTS = auto()
     DOES_NOT_EXIST = auto()

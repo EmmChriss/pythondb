@@ -381,6 +381,68 @@ class Server:
 
         return doc
 
+    AGGREGATE_LAMBDA = {
+        "avg": {
+            'type': 'float',
+            'ctx': lambda: (0, 0),
+            'each': lambda t, val: (t[0] + 1, t[1] + val),
+            'post': lambda t: t[1] / t[0]
+        },
+        "count": {
+            'type': 'int',
+            'ctx': lambda: 0,
+            'each': lambda t, val: t + 1,
+            'post': lambda t: t
+        },
+        "sum": {
+            'ctx': lambda: 0,
+            'each': lambda t, val: t + val,
+            'post': lambda t: t
+        },
+        "min": {
+            'ctx': lambda: None,
+            'each': lambda t, val: t and min(t, val) or val,
+            'post': lambda t: t
+        },
+        "max": {
+            'ctx': lambda: None,
+            'each': lambda t, val: t and max(t, val) or val,
+            'post': lambda t: t
+        }
+    }
+
+    def __agggregate_rows(self, rows, aggregation, group_by):
+        ts = []
+        for i, a in enumerate(aggregation):
+            t = Server.AGGREGATE_LAMBDA[a['op']]['ctx']()
+            ts.append(t)
+
+        for row in rows:
+            for i, a in enumerate(aggregation):
+                ts[i] = Server.AGGREGATE_LAMBDA[a['op']]['each'](ts[i], row[a['row']])
+
+        for i, a in enumerate(aggregation):
+            ts[i] = Server.AGGREGATE_LAMBDA[a['op']]['post'](ts[i])
+
+        res = group_by.copy()
+        for t, a in zip(ts, aggregation):
+            res[a['name']] = t
+
+        return res
+
+    def __project_rows(self, rows, projection):
+        for row in rows:
+            for col in list(row.keys()):
+                if col not in projection:
+                    del row[col]
+
+            for pj in projection:
+                if pj != projection[pj]:
+                    row[projection[pj]] = row[pj]
+                    del row[pj]
+
+            yield row
+
     OP_LAMBDA = {
         "=": lambda a, b: a == b,
         "!=": lambda a, b: a != b,
@@ -506,6 +568,52 @@ class Server:
     # columns: dict[alias, col]
     # where: list[{lhs, rhs, op, inner}]
     def select(self, tables, columns, where, having):
+        any_select = '*' in columns
+
+        group_by = []
+        aggregate = []
+        to_delete = []
+        to_append = []
+        for alias in columns:
+            col = columns[alias]
+            if '(' in col:
+                spl = col.split('(')
+                if len(spl) != 2:
+                    raise ServerError(Error.INVALID_AGGREGATION, f'col: {col}')
+                func, spl = spl
+
+                spl = spl.split(')')
+                if len(spl) != 2:
+                    raise ServerError(Error.INVALID_AGGREGATION, f'col: {col}')
+                inner_col, spl = spl
+
+                if spl != '':
+                    raise ServerError(Error.INVALID_AGGREGATION, f'col: {col}')
+
+                if func not in Server.AGGREGATE_LAMBDA:
+                    raise ServerError(Error.INVALID_AGGREGATION, f'col: {col}: no such aggregation function')
+
+                aggregate.append({
+                    'op': func,
+                    'row': inner_col,
+                    'name': alias,
+                    'type': Server.AGGREGATE_LAMBDA[func].get('type') or None
+                })
+                to_delete.append(alias)
+                to_append.append(inner_col)
+            else:
+                group_by.append(col)
+
+        for col in to_delete:
+            del columns[col]
+
+        for col in to_append:
+            columns[col] = col
+
+        with_id = '_id' in columns
+        if with_id:
+            del columns['_id']
+
         tab_defs = {}
         tab_dicts = {}
         for alias in tables:
@@ -527,82 +635,59 @@ class Server:
                 col_ref[f'{alias}.{col}'] = (alias, col)
 
         # take aliased columns into account
-        # TODO: rework this, it has bugs
-        aliased_refs = []
+        alias_ref = {}
         for alias in columns:
             if alias == '*':
-                break
+                continue
 
-            breakpoint()
             col = columns[alias]
+
+            # alias references non-existing column
             if (ref := col_ref.get(col)) is None:
                 if col in ambiguous_refs:
                     raise ServerError(Error.AMBIGUOUS_REFERENCE, f'ref: {col}; try table.column format')
-                elif col in aliased_refs:
-                    raise ServerError(Error.INVALID_REFERENCE, f"ref: {col}: no such column: column was aliased")
                 else:
                     raise ServerError(Error.INVALID_REFERENCE, f"ref: {col}: no such column")
-            rtab, rcol = ref
 
-            if col_ref.get(rcol) is not None:
-                del col_ref[rcol]
-                if rcol in aliased_refs:
-                    aliased_refs.remove(rcol)
-            if col_ref.get(f'{rtab}.{rcol}') is not None:
-                del col_ref[f'{rtab}.{rcol}']
+            # alias collides with existing name
+            # if col_ref.get(alias) is not None:
+            #     raise ServerError(Error.AMBIGUOUS_REFERENCE, f'alias: {alias}: collides with {".".join(col_ref[alias])}')
 
-            if col_ref.get(alias) is not None:
-                del col_ref[alias]
-                ambiguous_refs.append(alias)
-            else:
-                aliased_refs.append(alias)
-                col_ref[alias] = ref
-
-            aliased_refs.append(f'{rtab}.{alias}')
-            col_ref[f'{rtab}.{alias}'] = ref
+            col_ref[alias] = ref
+            alias_ref[ref] = alias
 
         # check that projection columns and columns used in filtering actually exist
         where_cols = chain(
             map(lambda wh: wh['lhs'], where),
             map(lambda wh: wh['rhs'],
                 filter(lambda wh: wh['inner'], where)))
+        to_check = chain(columns, where_cols)
 
-        if '*' in columns:
-            to_check = where_cols
-        else:
-            to_check = chain(columns, where_cols)
-
+        # collect the minimal amount of columns needed for the query to work
+        col_by_table = {}
         for col in to_check:
+            if col == '*':
+                continue
+
             if (ref := col_ref.get(col)) is None:
                 if col in ambiguous_refs:
                     raise ServerError(Error.AMBIGUOUS_REFERENCE, f'ref: {col}; try table.column format')
-                elif col in aliased_refs:
-                    raise ServerError(Error.INVALID_REFERENCE, f"ref: {col}: no such column: column was aliased")
                 else:
                     raise ServerError(Error.INVALID_REFERENCE, f"ref: {col}: no such column")
 
-        # figure out what applies to which subselect
-        if '*' in columns:
-            col_by_table = {}
+            rtab, rcol = ref
+            if rtab not in col_by_table:
+                col_by_table[rtab] = {}
+            col_by_table[rtab][rcol] = alias_ref.get(ref) or f'{rtab}.{rcol}'
+
+        # if any_select, override everything with every column
+        if any_select:
             for alias in tab_dicts:
-                col_by_table[alias] = {}
                 tab_dict = tab_dicts[alias]
                 for col in tab_dict:
-                    rtab, rcol = col_ref['.'.join((alias, col))]
-                    if rcol in ambiguous_refs:
-                        col_by_table[alias][rcol] = f'{rtab}.{rcol}'
-                    else:
-                        col_by_table[alias][rcol] = rcol
-        else:
-            col_by_table = {}
-            for col in columns:
-                rtab, rcol = col_ref[col]
-                if rtab not in col_by_table:
-                    col_by_table[rtab] = {}
-                if rcol in ambiguous_refs:
-                    col_by_table[rtab][rcol] = f'{rtab}.{rcol}'
-                else:
-                    col_by_table[rtab][rcol] = rcol
+                    ref = col_ref[f'{alias}.{col}']
+                    rtab, rcol = ref
+                    col_by_table[alias][rcol] = alias_ref.get(ref) or f'{rtab}.{rcol}'
 
         wh_by_table = {}
         wh_by_join = {}
@@ -640,13 +725,8 @@ class Server:
         rows0 = None
         alias0 = None
         for alias1 in tables:
-            cols = ['*']
-            if col_by_table is not None:
-                cols = col_by_table[alias1]
-
-            wh = []
-            if wh_by_table.get(alias1) is not None:
-                wh = wh_by_table[alias1]
+            cols = col_by_table.get(alias1) or ['*']
+            wh = wh_by_table.get(alias1) or []
 
             rows1 = self.__query(tables[alias1], cols, wh)
             if rows0 is None:
@@ -654,9 +734,7 @@ class Server:
                 alias0 = alias1
                 continue
 
-            whs = wh_by_join.get(frozenset([alias0, alias1]))
-            if whs is None:
-                whs = []
+            whs = wh_by_join.get(frozenset([alias0, alias1])) or []
 
             # construct hash-join table
             whs_eq = {}
@@ -687,6 +765,44 @@ class Server:
             rows0 = filter(lambda row: self.__where_check(row, whs), rows0)
             alias0 = alias1
 
+        projection = {}
+        if with_id:
+            projection['_id'] = '_id'
+
+        for col in columns:
+            projection[col] = col
+
+        rows0 = self.__project_rows(rows0, projection)
+
+        if len(aggregate) > 0:
+            rows = list(rows0)
+
+            # TODO: redesign this to work with iterator-chains
+            # 1. set instead of map
+            # 2. after each row, update row with relevant tuple hash
+            hash_group = {}
+            for i, row in enumerate(rows):
+                tup = tuple(map(lambda k: row[k], group_by))
+                if tup in hash_group:
+                    hash_group[tup].append(i)
+                else:
+                    hash_group[tup] = [i]
+
+            for hv, aggr in zip(having, aggregate):
+                if aggr['type'] is not None:
+                    type = aggr['type']
+                else:
+                    rtab, rcol = col_ref[aggr['row']]
+                    col_def = tab_dicts[rtab][rcol]
+                    type = col_def['type']
+
+                hv['rhs'] = self.cast_to(hv['rhs'], type)
+
+            groups = map(lambda k: (map(lambda i: rows[i], hash_group[k]), {l: rows[hash_group[k][0]][l] for l in group_by}), hash_group)
+            groups = map(lambda rs: self.__agggregate_rows(rs[0], aggregate, rs[1]), groups)
+            groups = filter(lambda row: self.__where_check(row, having), groups)
+            return groups
+
         return rows0
 
     def run_command(self, command) -> (int, str):
@@ -704,29 +820,23 @@ class Server:
             select [ * | COL,.. ] from TABLE[:ALIAS],.. [ where VAR=VAL|TAB1.COL1=&TAB2.COL2 .. ]
         '''
 
-        def parse_where_clause(where_clause):
-            if len(where_clause) == 0:
+        def parse_clause(clause):
+            if len(clause) == 0:
                 return []
 
-            if where_clause[0] == 'where':
-                where_clause = where_clause[1:]
-            ops = ['>=', '<=', '/=', '!=', '<', '>', '=']
             where = []
-            for wh in where_clause:
-                if wh.lower() == 'and':
-                    continue
-
-                op = list(filter(lambda op: op in wh, ops))
+            for wh in clause:
+                op = list(filter(lambda op: op in wh, Server.OP_LAMBDA.keys()))
                 if len(op) > 1 and op[1] in op[0]:
                     op = op[0]
                 elif len(op) != 1:
-                    raise ServerError(Error.INVALID_COMMAND, f"where clause: {wh}")
+                    raise ServerError(Error.INVALID_COMMAND, f"clause: {wh}")
                 else:
                     op = op[0]
 
                 a = wh.split(op)
                 if len(a) != 2:
-                    raise ServerError(Error.INVALID_COMMAND, f"where clause: {wh}")
+                    raise ServerError(Error.INVALID_COMMAND, f"clause: {wh}")
 
                 # set 'inner' if both lhs and rhs is a column reference
                 if a[1][0] == '&':
@@ -766,7 +876,7 @@ class Server:
                     where = parse_where_clause(where_clause)
                     self.delete(table, where)
                 case ["select", cols, "from", tables, *clauses]:
-                    
+
                     # column aliasing
                     cols = cols.split(',')
                     if '*' in cols:
@@ -791,39 +901,19 @@ class Server:
                         else:
                             tables_[tab] = tab
 
-                    if 'on' in clauses:
-                        on_idx = clauses.index('on')
-                    else:
-                        on_idx = None
+                    clause_map = {}
+                    clause_list = None
+                    for cl in clauses:
+                        if cl in ['on', 'where', 'having']:
+                            clause_map[cl] = []
+                            clause_list = clause_map[cl]
+                        elif clause_list is None:
+                            raise ServerError(Error.INVALID_COMMAND, f'no clause given before {cl}: valid options are: on, where, having')
+                        else:
+                            clause_list.append(cl)
 
-                    if 'where' in clauses:
-                        where_idx = clauses.index('where')
-                    else:
-                        where_idx = None
-
-                    if 'having' in clauses:
-                        having_idx = clauses.index('having')
-                    else:
-                        having_idx = None
-
-                    if on_idx:
-                        on_clause = clauses[:where_idx or having_idx]
-                    else:
-                        on_clause = []
-
-                    if where_idx:
-                        where_clause = clauses[where_idx+1:having_idx]
-                    else:
-                        where_clause = []
-
-                    if having_idx:
-                        having_clause = clauses[having_idx:]
-                    else:
-                        having_clause = []
-                    
-                    breakpoint()
-                    where = parse_where_clause(on_clause + where_clause)
-                    having = parse_where_clause(having_clause)
+                    where = parse_clause((clause_map.get('on') or []) + (clause_map.get('where') or []))
+                    having = parse_clause(clause_map.get('having') or [])
                     rows = self.select(tables_, cols_, where, having)
 
                     return int(Error.ROWS), rows
