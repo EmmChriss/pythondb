@@ -259,6 +259,10 @@ class Server:
                     if row is not None:
                         raise ServerError(Error.DUPLICATE_UNIQUE, f"col: {col['name']}={val} already exists")
 
+        # fk -> uq
+        # uq: { _id: {col1: val1}, key: _id, refs: [{table: table1, key: key1}, ..] }
+        # nq: { _id: {col1: val1}, keys: [_id] }
+
         # everything is valid, let's index it
         for col, val in zip(tab_def, values):
             match col['role']:
@@ -289,16 +293,16 @@ class Server:
         tab_dict = self.table_def_to_dict(tab_def)
 
         # no need to validate 'where', select handles it
-        rows = self.__query(table, ['*'], where)
+        rows = self.__query(table, {'*': '*'}, where)
 
         # check if fk constraints let us delete
         # dont delete anything until then
         for row in rows:
             for col in row:
-                if col == '_id' or tab_dict[col]['role'] not in ['unique', 'primary-key']:
+                if col == '_id':
                     continue
 
-                res = self.idb[f'{table}_uq'].find_one({'_id': {col: row[col]}})
+                res = self.idb[f'{table}_uq'].find_one({'_id': {col: str(row[col])}})
                 if res is not None and len(res['refs']) != 0:
                     refs = ', '.join(map(lambda ref: f'{ref["table"]}:{ref["key"]}', res['refs']))
                     raise ServerError(Error.FOREIGN_KEY_CONSTRAINT, f"{table}.{col}:{row['_id']} referenced by {refs}")
@@ -308,7 +312,7 @@ class Server:
         for row in rows:
             for colname in row:
                 key = row['_id']
-                val = row[colname]
+                val = str(row[colname])
                 col = tab_dict.get(colname)
                 if col is None:
                     continue
@@ -486,6 +490,7 @@ class Server:
         to_delete = []
         for col_name in where_eq:
             val = where_eq[col_name]
+            col_name = col_name.split('.')[-1]
             keys = None
             col = tab_def_dict[col_name]
 
@@ -525,6 +530,7 @@ class Server:
         return (ids, to_delete)
 
     def __query(self, table, columns, where):
+        any_select = '*' in columns
         tab_dict = self.read_table_dict(table)
 
         # cast values in where to column types
@@ -540,7 +546,7 @@ class Server:
                     orig_column = col
                     break
 
-            wh['rhs'] = self.cast_to(wh['rhs'], tab_dict[orig_column]['type'])
+            wh['rhs'] = self.cast_to(wh['rhs'], tab_dict[orig_column or wh['lhs']]['type'])
 
         # construct where_eq for use in searching by index
         where_eq = {}
@@ -673,7 +679,7 @@ class Server:
             map(lambda wh: wh['rhs'],
                 filter(lambda wh: wh['inner'], where)))
         to_check = chain(columns, where_cols)
-
+    
         # collect the minimal amount of columns needed for the query to work
         col_by_table = {}
         for col in to_check:
@@ -738,8 +744,8 @@ class Server:
         rows0 = None
         alias0 = None
         for alias1 in tables:
-            cols = col_by_table.get(alias1) or ['*']
-            wh = wh_by_table.get(alias1) or []
+            cols = col_by_table.get(alias1) or {'*': '*'}
+            wh = wh_by_table.get(alias1) or {}
             rows1 = self.__query(tables[alias1], cols, wh)
             if rows0 is None:
                 rows0 = rows1
@@ -806,23 +812,12 @@ class Server:
         return rows0
 
     def run_command(self, command) -> (int, str):
-        '''
-            returns (code, message)
-
-            create_database DATABASE
-            drop_database DATABASE
-            use_database DATABASE
-            create_table TABLE
-            create_column TABLE CNAME CTYPE [ primary-key, foreign-key=TABLE.COLNAME, unique, index, none ]
-            drop_table TABLE
-            insert into TABLE values VALUES#..
-            delete TABLE [ where VAR=VAL .. ]
-            select [ * | COL,.. ] from TABLE[:ALIAS],.. [ where VAR=VAL|TAB1.COL1=&TAB2.COL2 .. ]
-        '''
-
         def parse_clause(clause):
             if len(clause) == 0:
                 return []
+
+            if 'where' in clause:
+                clause.remove("where")
 
             where = []
             for wh in clause:
@@ -873,7 +868,7 @@ class Server:
                     values = values.split('#')
                     self.insert(table, values)
                 case ["delete", table, *where_clause]:
-                    where = parse_where_clause(where_clause)
+                    where = parse_clause(where_clause)
                     self.delete(table, where)
                 case ["select", cols, "from", tables, *clauses]:
 
@@ -902,17 +897,42 @@ class Server:
                             tables_[tab] = tab
 
                     clause_map = {}
-                    clause_list = None
-                    for cl in clauses:
-                        if cl in ['on', 'where', 'having']:
-                            clause_map[cl] = []
-                            clause_list = clause_map[cl]
-                        elif clause_list is None:
-                            raise ServerError(Error.INVALID_COMMAND, f'no clause given before {cl}: valid options are: on, where, having')
-                        else:
-                            clause_list.append(cl)
+                    clause_map['where'] = []
+                    clause_map['having'] = []
 
-                    where = parse_clause((clause_map.get('on') or []) + (clause_map.get('where') or []))
+                    where = []
+                    group_by = []
+                    while len(clauses) > 0:
+                        match clauses:
+                            case ["join", tab, *rest]:
+                                clauses = rest
+
+                                spl = tab.split('=')
+                                if len(spl) == 2:
+                                    table, alias = spl
+                                    tables_[alias] = table
+                                else:
+                                    tables_[tab] = tab
+                            case ['on', cond, *rest]:
+                                clauses = rest
+                                wh = parse_clause(cond.split(','))
+                                wh[0]['inner'] = True
+                                where.append(wh[0])
+                            case ['group_by', cols, *rest]:
+                                clauses = rest
+                                group_by = cols.split(',')
+                            case _:
+                                if clauses[0] not in ['where', 'having']:
+                                    raise ServerError(Error.INVALID_COMMAND, f'invalid clause: {clauses}')
+                                next_clause = next((i+1 for i, cl in enumerate(clauses[1:]) if cl in ['where', 'having', 'group_by']), None)
+                                current_clause = clauses[:next_clause]
+                                clause_map[clauses[0]].extend(current_clause[1:])
+                                if next_clause is None:
+                                    clauses = []
+                                else:
+                                    clauses = clauses[next_clause:]
+
+                    where += parse_clause((clause_map.get('on') or []) + (clause_map.get('where') or []))
                     having = parse_clause(clause_map.get('having') or [])
                     rows = self.select(tables_, cols_, where, having)
 

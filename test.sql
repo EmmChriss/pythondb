@@ -55,10 +55,10 @@ SELECT: simple join
 select * from a,b
 
 SELECT: join with where
-select * from a,b a1=&b1
+select * from a,b where a1=&b1
 
 SELECT: join with where
-select * from a,b a1>&b1
+select * from a,b where a1>&b1
 
 SELECT: join with aliases
 select c.a1,d.b1 from a=c,b=d
@@ -84,3 +84,4 @@ drop_table a
 
 drop_table b
 drop_table a
+
